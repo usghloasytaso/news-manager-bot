@@ -1,4 +1,4 @@
-// MTProto user client (gramjs): login with code, session persist in Supabase
+// MTProto user client (gramjs): QR login, session persist in Supabase
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { getSetting, setSetting } = require('./store');
@@ -96,6 +96,83 @@ async function logoutSession() {
   dropUserClient();
 }
 
+// ---------- QR login (no code typing, safe inside Telegram) ----------
+const QRCode = require('qrcode');
+const qrFlows = new Map(); // userId -> { client, loginPromise, passwordResolve }
+
+async function beginQrLogin(userId, onPasswordNeeded) {
+  cancelQr(userId);
+  const client = new TelegramClient(new StringSession(''), apiId, apiHash, {
+    connectionRetries: 5,
+  });
+  await client.connect();
+  let resolvePng;
+  const pngPromise = new Promise((r) => (resolvePng = r));
+  const flow = { client, loginPromise: null, passwordResolve: null };
+  qrFlows.set(String(userId), flow);
+  flow.loginPromise = client.signInUserWithQrCode(
+    { apiId, apiHash },
+    {
+      qrCode: async (qr) => {
+        const url = 'tg://login?token=' + qr.token.toString('base64url');
+        const png = await QRCode.toBuffer(url, { width: 400 });
+        resolvePng(png);
+      },
+      password: async () => {
+        return new Promise((resolve) => {
+          flow.passwordResolve = resolve;
+          if (onPasswordNeeded) onPasswordNeeded();
+        });
+      },
+      onError: (e) => {
+        throw e;
+      },
+    }
+  );
+  const png = await pngPromise;
+  return png;
+}
+
+async function waitQrLogin(userId) {
+  const flow = qrFlows.get(String(userId));
+  if (!flow) throw new Error('NO_QR_FLOW');
+  await flow.loginPromise;
+  const sessionStr = flow.client.session.save();
+  await setSetting('session', sessionStr);
+  const check = await getSetting('session');
+  try {
+    await flow.client.disconnect();
+  } catch (e) {}
+  qrFlows.delete(String(userId));
+  userClient = null;
+  if (!check) throw new Error('SAVE_FAILED');
+  return true;
+}
+
+function resolveQrPassword(userId, pw) {
+  const flow = qrFlows.get(String(userId));
+  if (flow && flow.passwordResolve) {
+    flow.passwordResolve(pw);
+    flow.passwordResolve = null;
+    return true;
+  }
+  return false;
+}
+
+function hasQrFlow(userId) {
+  return qrFlows.has(String(userId));
+}
+
+function cancelQr(userId) {
+  const flow = qrFlows.get(String(userId));
+  if (flow) {
+    try {
+      flow.client.disconnect();
+    } catch (e) {}
+    qrFlows.delete(String(userId));
+  }
+}
+
 module.exports = {
   getUserClient,
   dropUserClient,
@@ -105,4 +182,9 @@ module.exports = {
   confirmLoginCode,
   confirmLoginPassword,
   logoutSession,
+  beginQrLogin,
+  waitQrLogin,
+  resolveQrPassword,
+  hasQrFlow,
+  cancelQr,
 };
