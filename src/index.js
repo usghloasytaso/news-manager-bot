@@ -5,12 +5,11 @@ require('dotenv').config();
 
 const { getSetting, setSetting, queueCount } = require('./store');
 const {
-  getUserClient,
-  startLoginFlow,
-  getLoginFlow,
-  clearLoginFlow,
-  confirmLoginCode,
-  confirmLoginPassword,
+  beginQrLogin,
+  waitQrLogin,
+  resolveQrPassword,
+  hasQrFlow,
+  cancelQr,
   logoutSession,
 } = require('./userclient');
 const { setBot, scanOnce, publishTick } = require('./engine');
@@ -87,63 +86,69 @@ bot.callbackQuery('status', async (ctx) => {
   await ctx.answerCallbackQuery();
 });
 
-// ---------- login flow ----------
+// ---------- QR login flow (no code typing) ----------
 bot.callbackQuery('login', async (ctx) => {
-  clearLoginFlow(ctx.from.id);
-  setState(ctx.from.id, 'await_phone');
-  await ctx.reply('📱 شماره موبایلت را با فرمت زیر بفرست:\n+98912...', { reply_markup: backMenu() });
+  cancelQr(ctx.from.id);
+  clearState(ctx.from.id);
   await ctx.answerCallbackQuery();
+  try {
+    await ctx.reply('⏳ دارم کد QR می‌سازم...');
+    const png = await beginQrLogin(ctx.from.id, async () => {
+      setState(ctx.from.id, 'await_qr_password');
+      try {
+        await bot.api.sendMessage(
+          ctx.from.id,
+          '🔐 اکانتت رمز دومرحله‌ای دارد.\nرمز را همین‌جا بفرست (بعدش پیام رمز را پاک کن):'
+        );
+      } catch (e) {}
+    });
+    await ctx.replyWithPhoto(
+      { source: png },
+      {
+        caption:
+          '📷 با گوشی این را اسکن کن:\nتلگرام → تنظیمات → دستگاه‌ها → اتصال دستگاه\n\nاگه منقضی شد، دوباره دکمه ورود را بزن.',
+      }
+    );
+    // background waiter
+    waitQrLogin(ctx.from.id)
+      .then(async () => {
+        clearState(ctx.from.id);
+        await bot.api.sendMessage(ctx.from.id, '🎉 ورود موفق بود و ذخیره شد!\nحالا دکمه شروع را بزن.', {
+          reply_markup: mainMenu(),
+        });
+      })
+      .catch(async (e) => {
+        if (hasQrFlow(ctx.from.id)) cancelQr(ctx.from.id);
+        clearState(ctx.from.id);
+        await bot.api.sendMessage(
+          ctx.from.id,
+          '❌ ورود کامل نشد (QR منقضی شد یا خطا). دوباره دکمه ورود را بزن.'
+        );
+      });
+    // safety timeout: 3 minutes
+    setTimeout(async () => {
+      if (hasQrFlow(ctx.from.id)) {
+        cancelQr(ctx.from.id);
+        clearState(ctx.from.id);
+        try {
+          await bot.api.sendMessage(ctx.from.id, '⏰ وقت QR تمام شد. دوباره دکمه ورود را بزن.');
+        } catch (e) {}
+      }
+    }, 180000);
+  } catch (e) {
+    cancelQr(ctx.from.id);
+    await ctx.reply('❌ ساخت QR ناموفق بود: ' + (e.errorMessage || e.message));
+  }
 });
 
-async function handlePhoneInput(ctx, phone) {
-  const clean = phone.replace(/[\s-]/g, '');
-  if (!/^\+?\d{10,15}$/.test(clean)) {
-    return ctx.reply('❌ فرمت شماره درست نیست. مثال: +98912...');
+async function handleQrPasswordInput(ctx, password) {
+  if (!resolveQrPassword(ctx.from.id, password)) {
+    return ctx.reply('❌ جریانی فعال نیست. دوباره دکمه ورود را بزن.');
   }
-  const full = clean.startsWith('+') ? clean : '+' + clean;
   try {
-    await ctx.reply('⏳ دارم کد می‌فرستم به تلگرامت...');
-    await startLoginFlow(ctx.from.id, full);
-    setState(ctx.from.id, 'await_code', { phone: full });
-    await ctx.reply('✅ کد به تلگرامت ارسال شد.\nکد را همین‌جا بفرست (فقط جدیدترین کد):', {
-      reply_markup: backMenu(),
-    });
-  } catch (e) {
-    clearLoginFlow(ctx.from.id);
-    await ctx.reply('❌ ارسال کد ناموفق بود: ' + (e.errorMessage || e.message) + '\nچند دقیقه صبر کن و دوباره تلاش کن.');
-  }
-}
-
-async function handleCodeInput(ctx, code) {
-  const clean = code.replace(/\D/g, '');
-  if (clean.length < 4) return ctx.reply('❌ کد را کامل بفرست.');
-  try {
-    await confirmLoginCode(ctx.from.id, clean);
-    clearState(ctx.from.id);
-    await ctx.reply('🎉 ورود موفق بود و ذخیره شد!\nحالا دکمه شروع را بزن تا رصد فعال شود.', {
-      reply_markup: mainMenu(),
-    });
-  } catch (e) {
-    if (e.message === 'NEED_PASSWORD') {
-      setState(ctx.from.id, 'await_password');
-      return ctx.reply('🔐 اکانتت رمز دومرحله‌ای دارد.\nرمز را بفرست:');
-    }
-    if ((e.errorMessage || e.message || '').includes('PHONE_CODE')) {
-      return ctx.reply('❌ کد اشتباه یا منقضی شده.\nدکمه ورود را دوباره بزن و کد جدید را سریع بفرست.');
-    }
-    return ctx.reply('❌ خطا: ' + (e.errorMessage || e.message));
-  }
-}
-
-async function handlePasswordInput(ctx, password) {
-  try {
-    await confirmLoginPassword(ctx.from.id, password);
-    clearState(ctx.from.id);
-    try { await ctx.deleteMessage(); } catch (e) {}
-    await ctx.reply('🎉 ورود موفق بود و ذخیره شد!', { reply_markup: mainMenu() });
-  } catch (e) {
-    return ctx.reply('❌ رمز اشتباه است. دوباره بفرست:');
-  }
+    await ctx.deleteMessage();
+  } catch (e) {}
+  await ctx.reply('⏳ رمز را گرفتم، کمی صبر کن...');
 }
 
 // ---------- sources ----------
@@ -287,9 +292,7 @@ bot.on('message:text', async (ctx) => {
     return ctx.reply('از دکمه‌ها استفاده کن یا بنویس: راهنما', { reply_markup: mainMenu() });
   }
 
-  if (st.step === 'await_phone') return handlePhoneInput(ctx, text);
-  if (st.step === 'await_code') return handleCodeInput(ctx, text);
-  if (st.step === 'await_password') return handlePasswordInput(ctx, text);
+  if (st.step === 'await_qr_password') return handleQrPasswordInput(ctx, text);
   if (st.step === 'await_source') return handleSourceInput(ctx, text);
   if (st.step === 'await_dest') {
     if (/^-?\d+$/.test(norm)) {
