@@ -124,12 +124,12 @@ async function publishNow(dest, text, srcMsg) {
           const buf = await client.downloadMedia(srcMsg, {});
           if (buf && buf.length < 45 * 1024 * 1024) {
             if (isPhoto) {
-              await botRef.api.sendPhoto(dest, { source: buf }, { caption: text });
+              await botRef.api.sendPhoto(dest, new InputFile(buf), { caption: text });
               await setSetting('last_publish_at', Date.now());
               return;
             }
             if (isVideo) {
-              await botRef.api.sendVideo(dest, { source: buf }, { caption: text });
+              await botRef.api.sendVideo(dest, new InputFile(buf), { caption: text });
               await setSetting('last_publish_at', Date.now());
               return;
             }
