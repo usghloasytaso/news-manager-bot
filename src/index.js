@@ -1,4 +1,4 @@
-const { Bot, InlineKeyboard } = require('grammy');
+const { Bot, InlineKeyboard, InputFile } = require('grammy');
 const express = require('express');
 const cron = require('node-cron');
 require('dotenv').config();
