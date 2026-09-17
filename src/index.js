@@ -56,7 +56,7 @@ async function statusText() {
 📡 تعداد منابع: ${sources.length}
 🎯 مقصد: ${dest}
 ✍️ امضا: ${sign}
-🖼 عکس: ${sendPhoto ? 'روشن' : 'خاموش'} | 🎬 فیلم: ${sendVideo ? 'روشن' : 'خاموش'}
+🖼 عکس: ${sendPhoto ? 'روشن ✅' : 'خاموش ❌'} | 🎬 فیلم: ${sendVideo ? 'روشن ✅' : 'خاموش ❌'}
 ⏱ فاصله انتشار: هر ${intervalMin} دقیقه
 📥 خبر در صف: ${pending}`;
 }
@@ -86,59 +86,52 @@ bot.callbackQuery('status', async (ctx) => {
   await ctx.answerCallbackQuery();
 });
 
-// ---------- QR login flow (no code typing) ----------
+// ---------- QR login flow (no code typing, auto-retry x3) ----------
+function runQrAttempt(ctx, attempt) {
+  beginQrLogin(ctx.from.id, async () => {
+    setState(ctx.from.id, 'await_qr_password');
+    try {
+      await bot.api.sendMessage(
+        ctx.from.id,
+        '🔐 اکانتت رمز دومرحله‌ای دارد.\nرمز را همین‌جا بفرست (بعدش پیام رمز را پاک کن):'
+      );
+    } catch (e) {}
+  })
+    .then(async (png) => {
+      await ctx.replyWithPhoto(new InputFile(png), {
+        caption:
+          attempt === 1
+            ? '📷 سریع اسکن کن (حدود ۳۰ ثانیه وقت داری):\nتلگرام → تنظیمات → دستگاه‌ها → اتصال دستگاه'
+            : `📷 QR تازه (تلاش ${attempt} از ۳) — سریع اسکن کن:`,
+      });
+      return waitQrLogin(ctx.from.id);
+    })
+    .then(async () => {
+      clearState(ctx.from.id);
+      await bot.api.sendMessage(ctx.from.id, '🎉 ورود موفق بود و ذخیره شد!\nحالا دکمه شروع را بزن.', {
+        reply_markup: mainMenu(),
+      });
+    })
+    .catch(async (e) => {
+      cancelQr(ctx.from.id);
+      if (attempt < 3) {
+        return runQrAttempt(ctx, attempt + 1);
+      }
+      clearState(ctx.from.id);
+      await bot.api.sendMessage(ctx.from.id, '❌ ورود کامل نشد. دوباره دکمه ورود را بزن.');
+    });
+}
+
 bot.callbackQuery('login', async (ctx) => {
   cancelQr(ctx.from.id);
   clearState(ctx.from.id);
   await ctx.answerCallbackQuery();
-  try {
-    await ctx.reply('⏳ دارم کد QR می‌سازم...');
-    const png = await beginQrLogin(ctx.from.id, async () => {
-      setState(ctx.from.id, 'await_qr_password');
-      try {
-        await bot.api.sendMessage(
-          ctx.from.id,
-          '🔐 اکانتت رمز دومرحله‌ای دارد.\nرمز را همین‌جا بفرست (بعدش پیام رمز را پاک کن):'
-        );
-      } catch (e) {}
-    });
-    await ctx.replyWithPhoto(
-          new InputFile(png),
-      {
-        caption:
-          '📷 با گوشی این را اسکن کن:\nتلگرام → تنظیمات → دستگاه‌ها → اتصال دستگاه\n\nاگه منقضی شد، دوباره دکمه ورود را بزن.',
-      }
-    );
-    // background waiter
-    waitQrLogin(ctx.from.id)
-      .then(async () => {
-        clearState(ctx.from.id);
-        await bot.api.sendMessage(ctx.from.id, '🎉 ورود موفق بود و ذخیره شد!\nحالا دکمه شروع را بزن.', {
-          reply_markup: mainMenu(),
-        });
-      })
-      .catch(async (e) => {
-        if (hasQrFlow(ctx.from.id)) cancelQr(ctx.from.id);
-        clearState(ctx.from.id);
-        await bot.api.sendMessage(
-          ctx.from.id,
-          '❌ ورود کامل نشد (QR منقضی شد یا خطا). دوباره دکمه ورود را بزن.'
-        );
-      });
-    // safety timeout: 3 minutes
-    setTimeout(async () => {
-      if (hasQrFlow(ctx.from.id)) {
-        cancelQr(ctx.from.id);
-        clearState(ctx.from.id);
-        try {
-          await bot.api.sendMessage(ctx.from.id, '⏰ وقت QR تمام شد. دوباره دکمه ورود را بزن.');
-        } catch (e) {}
-      }
-    }, 180000);
-  } catch (e) {
-    cancelQr(ctx.from.id);
-    await ctx.reply('❌ ساخت QR ناموفق بود: ' + (e.errorMessage || e.message));
-  }
+  await ctx.reply('⏳ دارم کد QR می‌سازم...\nاز قبل اسکنر گوشی را آماده کن (تنظیمات → دستگاه‌ها → اتصال دستگاه).');
+  runQrAttempt(ctx, 1);
+  // silent cleanup after 5 minutes if abandoned
+  setTimeout(() => {
+    if (hasQrFlow(ctx.from.id)) cancelQr(ctx.from.id);
+  }, 300000);
 });
 
 async function handleQrPasswordInput(ctx, password) {
