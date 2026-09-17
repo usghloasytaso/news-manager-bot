@@ -1,6 +1,7 @@
 // Scan sources with user account → AI review → queue/publish with bot to channel
 const crypto = require('crypto');
 const { Api } = require('telegram');
+const { InputFile } = require('grammy');
 const { getUserClient } = require('./userclient');
 const { reviewNews } = require('./ai');
 const { getSetting, setSetting, hasHash, addHash, queueAdd, queueNext, queueMarkSent } = require('./store');
