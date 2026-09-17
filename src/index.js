@@ -103,7 +103,7 @@ bot.callbackQuery('login', async (ctx) => {
       } catch (e) {}
     });
     await ctx.replyWithPhoto(
-      { source: png },
+          new InputFile(png),
       {
         caption:
           '📷 با گوشی این را اسکن کن:\nتلگرام → تنظیمات → دستگاه‌ها → اتصال دستگاه\n\nاگه منقضی شد، دوباره دکمه ورود را بزن.',
