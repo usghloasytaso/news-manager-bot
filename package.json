@@ -1,0 +1,20 @@
+{
+  "name": "news-manager-bot",
+  "version": "1.0.0",
+  "description": "Persian Telegram news manager bot: login with code, monitor sources, AI rewrite, publish to channel",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.3",
+    "grammy": "^1.46.0",
+    "groq-sdk": "^1.6.0",
+    "node-cron": "^4.6.0",
+    "telegram": "^2.26.22"
+  }
+}
